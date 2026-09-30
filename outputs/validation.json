@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "companies": 45,
+  "scored": 4,
+  "decisions": {
+    "보류": 17,
+    "제외": 27,
+    "투자 적격": 1
+  },
+  "analysis_errors": [],
+  "ranking": [
+    "C03"
+  ],
+  "issues": [],
+  "pdf_pages": 5
+}

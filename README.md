@@ -81,13 +81,13 @@ flowchart TD
 
 | 파일 | 내용 |
 |---|---|
-| `outputs/report.pdf` | 최신 실행의 최종 보고서, 5쪽 이내 |
-| `outputs/report.md` | 보고서 원문 |
-| `outputs/evaluation_results.json` | 전체 판정·점수·근거·오류·실행 이력; 기업별 중간 저장 |
-| `outputs/evaluation_summary.md` | 전체 기업 결과표 |
-| `outputs/validation.json` | 총점·판정·순위·인용·PDF 페이지 수 재검증 |
+| [outputs/report.pdf](outputs/report.pdf) | 최신 실행의 최종 보고서, 5쪽 이내 |
+| [outputs/report.md](outputs/report.md) | 보고서 원문 |
+| [outputs/evaluation_results.json](outputs/evaluation_results.json) | 전체 판정·점수·근거·오류·실행 이력; 기업별 중간 저장 |
+| [outputs/evaluation_summary.md](outputs/evaluation_summary.md) | 전체 기업 결과표 |
+| [outputs/validation.json](outputs/validation.json) | 총점·판정·순위·인용·PDF 페이지 수 재검증 |
 
-실행 결과·API 키·검색 캐시는 Git에서 제외된다. PDF 변환 실패는 평가 결과와 Markdown을 보존하며, `--pdf` 실행은 실패로 종료한다. 내용은 자동으로 삭제하지 않는다.
+검증을 마친 위 5개 결과 파일은 개인 저장소에 함께 보관한다. 새로 실행하면 이 파일들이 갱신되어 Git 변경으로 표시된다. API 키·검색 캐시·기타 임시 산출물은 Git에서 제외한다. PDF 변환 실패는 평가 결과와 Markdown을 보존하며, `--pdf` 실행은 실패로 종료한다. 내용은 자동으로 삭제하지 않는다.
 
 ## 구조와 문서
 

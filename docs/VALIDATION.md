@@ -49,4 +49,4 @@ uv run pytest -q
 
 실행 오류가 없다는 사실은 모든 서술과 외부 자료가 사실임을 보증하지 않는다. 직접 목표 시장 수치, 실측 성능과 동일 조건의 경쟁 비교는 여전히 확인하지 못했고 보고서에도 한계를 남겼다. 원문 기업 자료는 디렉토리북 작성 시점의 기록이다.
 
-최신 산출물은 `outputs/report.pdf`, `outputs/report.md`, `outputs/evaluation_results.json`, `outputs/evaluation_summary.md`, `outputs/validation.json`이다. 실행 결과와 API 키·캐시는 Git에서 제외한다.
+최신 산출물은 `outputs/report.pdf`, `outputs/report.md`, `outputs/evaluation_results.json`, `outputs/evaluation_summary.md`, `outputs/validation.json`이다. 이 5개 검증 완료 결과는 개인 저장소에 함께 보관한다. 게시한 평가 결과의 실행 경로는 저장소 기준 상대 경로로 정리했으며 API 키·검색 캐시·임시 산출물은 Git에서 제외한다.

@@ -27,6 +27,12 @@ dist/
 .cache/
 /outputs/*
 !/outputs/.gitkeep
+!/outputs/README.md
+!/outputs/report.pdf
+!/outputs/report.md
+!/outputs/evaluation_results.json
+!/outputs/evaluation_summary.md
+!/outputs/validation.json
 
 # 실행으로 생성되는 외부 조사·평가 결과 (원천 companies.json은 추적)
 /data/processed/g4_screening_results.json
