@@ -102,7 +102,7 @@ flowchart TD
 | `tests/` | 데이터 계약·검색·분기·채점·보고서·재개 검증 |
 | `docs/` | 설계·실행 안내·트러블슈팅 |
 
-[SETUP](docs/SETUP.md) · [전체 실행과 결과 점검](docs/FULL_PIPELINE.md) · [실제 실행 점검 기록](docs/VALIDATION.md) · [데이터 계약](docs/CONTRACTS.md) · [팀 설계정의서](docs/설계정의서.md) · [트러블슈팅](docs/TROUBLESHOOTING.md).
+[SETUP](docs/SETUP.md) · [전체 실행과 결과 점검](docs/FULL_PIPELINE.md) · [실제 실행 점검 기록](docs/VALIDATION.md) · [데이터 계약](docs/CONTRACTS.md) · [팀 설계정의서](docs/설계정의서.md) · [트러블슈팅](docs/TROUBLESHOOTING.md) · [프로젝트·개인 기여 STAR 정리](docs/PORTFOLIO_STAR.md).
 
 검색은 Chroma와 로컬 **BAAI/bge-m3 dense/sparse + RRF**를 사용한다. 팀의 18문항 실험에서 Hit@5 0.944, MRR@5 0.917을 기록했다. 작은 표본의 검색 결과이며 전체 평가 정확성을 보증하는 수치는 아니다. [비교 실험](eval/results.md).
 
