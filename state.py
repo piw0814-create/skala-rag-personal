@@ -44,6 +44,7 @@ class State(TypedDict, total=False):
     selected_company_id: str | None  # 투자 적격 중 1위, 없으면 None
     ranking: list[str]  # 투자 적격 기업 ID 순위
     final_report: str
+    report_outputs: dict  # Markdown·PDF 저장 경로와 PDF 생성 오류
 
 
 def next_attempt(state: State, output_key: str) -> int:

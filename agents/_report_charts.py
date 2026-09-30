@@ -417,7 +417,7 @@ def competitor_view(comp: dict, company_name: str) -> str:
                 metrics = {m.get("이름"): m.get("값") for m in metrics}
             tags = "".join(f'<span class="mtag">{html.escape(plain(k))} <b>{html.escape(plain(v)[:14])}</b></span>' for k, v in list(metrics.items())[:2])
             cards += (f'<div class="pcard"><div class="pn">{html.escape(plain(p.get("기업명")))}</div>'
-                      f'<div class="pp">{html.escape(plain(p.get("제품"))[:34])}</div>{tags}</div>')
+                      f'<div class="pp">{html.escape(plain(p.get("제품")))}</div>{tags}</div>')
         out += f'<div class="slabel">주요 경쟁 제품</div><div class="pcards">{cards}</div>'
     if rows:
         out += f'<div class="chartbox">{_compare_svg(rows, company_name)}</div>'
@@ -425,7 +425,7 @@ def competitor_view(comp: dict, company_name: str) -> str:
         li = lambda xs, empty: "".join(f"<li>{html.escape(plain(x))}</li>" for x in xs) or f"<li>{empty}</li>"  # noqa: E731
         out += (f'<div class="callouts"><div class="co good"><div class="cot">경쟁 대비 우위</div><ul>{li(strengths, "확인된 우위 없음")}</ul></div>'
                 f'<div class="co bad"><div class="cot">경쟁 대비 열위</div><ul>{li(weaknesses, "확인된 열위 없음")}</ul></div></div>')
-    note = " · ".join(x for x in (comp.get("비교조건"), comp.get("비교한계")) if x)
-    if note:
-        out += f'<div class="cnote">비교 조건·한계: {html.escape(plain(note)[:170])}</div>'
+    note = ("공개 지표를 비교했으며 서로 다른 측정조건에서는 우열을 단정할 수 없음" if rows
+            else "동일 지표·측정조건을 확인하지 못해 정량 비교 불가")
+    out += f'<div class="cnote">비교 조건·한계: {note}</div>'
     return f'<div class="compview">{out}</div>'

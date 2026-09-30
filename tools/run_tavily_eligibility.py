@@ -306,10 +306,10 @@ def _validate_criterion(code: str, item: CriterionResult, source_map: dict[str, 
     return {"결과": item.결과, "사유": item.사유, "근거ID": ids}
 
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--refresh", action="store_true", help="Reuse cached Tavily searches but rerun LLM assessment")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     load_dotenv(ROOT / ".env")
     # LangSmith tracing is optional; avoid remote trace attempts when its key is absent/invalid.
     os.environ["LANGSMITH_TRACING"] = "false"

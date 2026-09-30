@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from config import ITEMS, UNKNOWN_SCORE
+from agents._scoring_grounding import cap_score, delivery_quote, has_company_metric
 
 Q_IDS = [f"Q{i}" for i in range(1, 12)]
 ITEM_IDS = [i for items in ITEMS.values() for i in items]
@@ -71,6 +72,35 @@ def score_e2(company: dict) -> tuple[int, bool, str]:
     return 1, False, f"{year}년 매출 없음"
 
 
+def _eok_text(thousand: float) -> str:
+    v = thousand / 100_000
+    return f"{v:,.0f}억 원" if v >= 10 else f"{v:,.1f}억 원"
+
+
+def judge_q7(company: dict) -> tuple[str, str]:
+    """체크리스트 Q7 '매출이 발생하는가?' — 숫자만으로 정해지므로 코드로 판정한다(LLM이 천원 단위를 잘못 환산한 적이 있다).
+    YES: 최근 연도 매출 1억 원 이상 / PARTIAL: 1억 원 미만이나 발생 / NO: 매출 없음 / 확인불가: 비공개·기재 없음.
+    달러 해외 매출은 E2와 같은 정책으로 원화와 합산하지 않는다: 국내 매출만으로 1억 원 이상이면 YES, 아니면 확인불가."""
+    s = company.get("매출액") or {}
+    status, year = s.get("상태"), s.get("연도")
+    if status in ("비공개", "확인불가") or (status is None and not s):
+        return "확인불가", "매출 비공개 또는 기재 없음"
+    if status == "N/A":
+        return "NO", f"{year}년 매출 없음(N/A)"
+    domestic, overseas = s.get("국내"), s.get("해외")
+    if domestic is None and overseas is None:
+        return "확인불가", "매출 금액 기재 없음"
+    if overseas and s.get("해외단위") not in (None, "천원", "KRW_THOUSAND"):
+        if (domestic or 0) >= SALES_MID:
+            return "YES", f"{year}년 국내 매출 약 {_eok_text(domestic)}({domestic:,}천원)으로 1억 원 이상 (해외 매출은 환산하지 않음)"
+        return "확인불가", f"{year}년 해외 매출({s['해외단위']})이 있으나 환산 근거가 없어 1억 원 이상 여부를 확인할 수 없음"
+    total = (domestic or 0) + (overseas or 0)
+    if total <= 0:
+        return "NO", f"{year}년 매출 없음"
+    note = f"{year}년 매출 약 {_eok_text(total)}({int(total):,}천원)"
+    return ("YES", f"{note}, 1억 원 이상") if total >= SALES_MID else ("PARTIAL", f"{note}, 1억 원 미만")
+
+
 def score_e3(company: dict) -> tuple[int, bool, str]:
     """E3 투자 유치 — 확정 투자만 합산(협의 중 제외). 100억↑이며 투자자 2곳↑이면 5점."""
     history = company.get("투자유치이력")
@@ -95,11 +125,8 @@ CODE_SCORED = {"E2": score_e2, "E3": score_e3}
 # ── 근거 ID ────────────────────────────────────────────────────────────────
 
 def allowed_evidence_ids(state: dict) -> set[str]:
-    """이번 기업에서 실제로 확보된 근거 ID (current_evidence + 각 분석 결과에 적힌 ID)."""
-    ids = {e["근거ID"] for e in state.get("current_evidence") or [] if e.get("근거ID")}
-    for key in ("eligibility", "technology_analysis", "market_analysis", "competitor_analysis"):
-        ids.update((state.get(key) or {}).get("근거ID") or [])
-    return ids
+    """이번 기업에서 실제 근거 레코드로 확보한 ID만 허용한다."""
+    return {e["근거ID"] for e in state.get("current_evidence") or [] if e.get("근거ID")}
 
 
 def _clean_ids(ids: list[str], allowed: set[str]) -> list[str]:
@@ -117,27 +144,50 @@ def normalize(out: InvestmentOut, state: dict) -> tuple[dict, dict, list[str]]:
 
     - 없는 ID는 버리고, 누락 문항은 확인 불가로 채운다(점수 2).
     - 확인 불가는 LLM 점수와 무관하게 2점으로 고정한다.
-    - E2·E3는 숫자 규칙으로 코드가 다시 계산해 LLM 값을 덮어쓴다.
+    - E2·E3와 매출 체크리스트 Q7은 숫자 규칙으로 코드가 다시 계산해 LLM 값을 덮어쓴다.
     - 허용되지 않은 근거 ID는 제거한다(보고서 REFERENCE가 만들 수 없는 ID 방지).
     """
     allowed = allowed_evidence_ids(state)
     company = state.get("current_company") or {}
+    market = state.get("market_analysis") or {}
+    missing_market_values = not any(
+        (market.get(key) or {}).get("값") not in (None, "", "확인 불가", "확인불가")
+        for key in ("시장규모", "성장률")
+    )
 
-    checklist = {
-        q.id: {"판정": q.판정, "근거": q.근거, "근거ID": _clean_ids(q.근거ID, allowed)} for q in out.checklist
-    }
+    checklist = {}
+    for q in out.checklist:
+        refs = _clean_ids(q.근거ID, allowed)
+        checklist[q.id] = {"판정": q.판정 if refs else "확인불가",
+                           "근거": q.근거 if refs else "유효한 원문 근거 없음 → 확인 불가", "근거ID": refs}
     for q in Q_IDS:
         checklist.setdefault(q, {"판정": "확인불가", "근거": "LLM 출력 누락", "근거ID": []})
+    if checklist["Q2"]["판정"] == "YES" and not has_company_metric(state):
+        checklist["Q2"].update(판정="PARTIAL", 근거="해결할 문제는 제시됐으나 원문 검증을 통과한 정량 효과가 없어 부분 확인")
 
     items: dict[str, dict] = {}
     unknown: list[str] = []
     for s in out.scorecard:
-        score = UNKNOWN_SCORE if s.확인불가 else s.점수
-        items[s.id] = {"점수": score, "채점이유": s.채점이유, "근거ID": _clean_ids(s.근거ID, allowed)}
-        if s.확인불가:
+        refs = _clean_ids(s.근거ID, allowed)
+        is_unknown = s.확인불가 or not refs or (s.id == "B1" and missing_market_values)
+        score = UNKNOWN_SCORE if is_unknown else s.점수
+        reason = s.채점이유 if refs else "유효한 원문 근거 없음 → 확인 불가"
+        if not is_unknown:
+            score, reason = cap_score(s.id, score, reason, state)
+        items[s.id] = {"점수": score, "채점이유": reason,
+                       "근거ID": refs}
+        if is_unknown:
             unknown.append(s.id)
 
     dir_ids = sorted(i for i in allowed if i.startswith("DIR-"))
+    verdict7, reason7 = judge_q7(company)
+    checklist["Q7"] = {"판정": verdict7, "근거": f"{reason7} (코드 산출)", "근거ID": dir_ids}
+    delivered = delivery_quote(company)
+    if delivered and dir_ids:
+        items["C2"] = {"점수": 5, "채점이유": f"기업 원문에서 현재 납품·양산 단계 확인: {delivered} (TRL 숫자는 추정하지 않음)",
+                       "근거ID": dir_ids}
+        unknown = [i for i in unknown if i != "C2"]
+        checklist["Q10"] = {"판정": "YES", "근거": f"기업 자료의 납품·양산 명시: {delivered}", "근거ID": dir_ids}
     for item_id, fn in CODE_SCORED.items():
         score, is_unknown, reason = fn(company)
         items[item_id] = {"점수": score, "채점이유": f"{reason} (코드 산출)", "근거ID": dir_ids}

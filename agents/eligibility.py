@@ -29,7 +29,7 @@ def _pdf_evidence(company: dict, as_of_date: str, excerpt: str, ordinal: int) ->
     return {
         "근거ID": f"ELG-{cid}-{ordinal:02d}",
         "출처명": SOURCE_TITLE,
-        "publisher": None,
+        "publisher": "창업진흥원",
         "pub_year": 2025,
         "source_type": "기관 보고서",
         "url": None,

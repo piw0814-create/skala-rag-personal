@@ -1,140 +1,111 @@
-# AI Startup Investment Evaluation Agent
+# AI 반도체 스타트업 투자 평가
 
-본 프로젝트는 **AI 반도체(Semiconductor)** 스타트업에 대한 투자 가능성을 자동으로 평가하는 에이전트를 설계하고 구현한 실습 프로젝트입니다.
-창업진흥원 「2025 초격차 스타트업 1000+ 디렉토리북」 시스템반도체 분야 **45개사 전체를 평가**하고, 투자 적격 기업 중 1위의 투자 보고서를 생성합니다.
+기업 디렉토리북의 시스템반도체 분야 **45개사 전체를 평가**하고, 투자 적격 기업 중 1위의 보고서를 만드는 Agentic RAG 프로젝트다. 특정 기업을 지정하거나 투자 판정을 강제하지 않는다. 적격 기업이 없으면 미선정 사유를 담은 별도 보고서를 만든다.
 
-> **결과 한 줄** — 45개사 → 제외 27 · 보류 17 · **투자 적격 1** → **망고부스트코리아(DPU) 투자 추천, 79.0점**
+[SKALA 팀 프로젝트](https://github.com/kimhynsoo/skala-rag)를 기반으로 실행 안정성·근거 검증·보고서 품질을 개선하는 개인 저장소다. 원천 자료와 설계·임베딩 비교 실험은 팀 작업을 이어 사용한다.
 
-## Overview
+## 실행
 
-- Objective : 창업자·시장성·제품/기술력·경쟁 우위·실적 5개 관점으로 AI 반도체 스타트업의 투자 적합성 분석
-- Method : LangGraph Multi-Agent, Agentic RAG(질의 재작성·재검색), Tool Calling, 코드 기반 점수·판정
-- Data : 기업 디렉토리북 + 기술 로드맵(IRDS·UCIe·CXL) + 시장 보고서(SIA·WSTS·KIET·OECD) 15개 PDF, 169쪽
-- Design : [설계정의서](docs/설계정의서.md) · [데이터 계약](docs/CONTRACTS.md) · [트러블슈팅](docs/TROUBLESHOOTING.md)
+Python 3.11과 uv를 사용한다. PDF 생성에는 Google Chrome 또는 Chromium이 필요하다.
 
-## Features (차별점)
+```bash
+git clone https://github.com/piw0814-create/skala-rag-personal.git
+cd skala-rag-personal
+uv sync --locked
+cp .env.example .env
+# .env에 OPENAI_API_KEY, TAVILY_API_KEY, DART_API_KEY 입력
 
-1. **실측 기반 설계** — 코퍼스를 먼저 측정(영문 65%, 숫자·식별자 밀도 3.8%, 다단 레이아웃)하고, 청킹·임베딩·검색 방식을 그 결과에서 도출
-2. **반증 가능한 임베딩 선정** — 골든셋 18문항 × 4개 비교군 실험. "성능 개선이 없으면 e5로 회귀"라는 번복 조건을 미리 정하고 측정
-3. **LLM은 채점만, 판정은 코드** — 총점·투자 판정·순위를 Python이 계산. 채점은 3회 반복 후 중앙값(회차별 총점 77.0~79.0)
-4. **전체 평가 후 1위 선정** — 처음 70점을 넘은 기업에서 멈추지 않고 45개사를 모두 평가한 뒤 순위를 매겨, 문서 수록 순서가 결과를 바꾸지 않음
-5. **근거 추적** — 모든 수치에 근거 ID(`TEC-02-0008`, `DIR-C03-01`)를 달고, 본문에서 실제 인용한 출처만 REFERENCE에 수록
+uv run python app.py --prepare --pdf
+uv run python -m tools.audit_results
+```
 
-## Tech Stack
+`--prepare`는 AI 관련성 검토와 DART·Tavily 조사를 먼저 진행한 다음 전체 평가를 실행한다. 기업 입력과 날짜 조건이 맞는 조사·검색 캐시는 재사용한다. 분석과 채점은 실제 API와 문서 검색으로 실행한다. 이미 조사를 끝냈다면 `--prepare`를 생략할 수 있다.
 
-- Framework : LangGraph, LangChain(`create_agent` + `ToolStrategy`), Pydantic
-- LLM/Generator : OpenAI **gpt-4.1-mini**
-- LLM/Judge : gpt-4.1-mini (근거 충분성 판정, 스코어카드 3회 채점) — 최종 판정은 코드
-- Retrieval : **Chroma + bge-m3 dense/sparse, RRF** — **Hit Rate@5 0.944, MRR@5 0.917** ([비교 실험](eval/results.md))
-- Embedding : **BAAI/bge-m3** (오픈소스, 로컬 실행)
-- Tools : 문서 검색(`search_tech_docs`, `search_market_docs`), OpenDART(상장 여부), Tavily(투자 단계·Exit·경쟁 제품)
+```bash
+# 기준일을 지정한 전체 실행
+uv run python app.py --prepare --as-of 2026-09-30 --pdf
 
-**임베딩 선정** — 한국어 질의로 영문 문서를 찾는 **교차언어 검색**과 `128 GT/s`·특허번호 같은 **정확일치**가 동시에 필요합니다. bge-m3는 dense(의미)와 sparse(단어 가중치)를 한 모델에서 생성합니다.
+# 중단된 실행을 저장 완료 기업 다음부터 재개: 원래 기준일을 그대로 사용
+uv run python app.py --resume --as-of 2026-09-30 --pdf
 
-| 비교군 | Hit@5 | MRR@5 | 정확일치 MRR |
-|---|---|---|---|
-| bge-m3 dense | 1.000 | 0.852 | 0.750 |
-| **bge-m3 dense + sparse (채택)** | 0.944 | **0.917** | **1.000** |
-| e5-base dense | 0.833 | 0.778 | 0.600 |
-| e5-base + BM25(Kiwi) | 0.778 | 0.750 | 0.600 |
+# 평가 결과는 유지하고 보고서 문장·PDF만 다시 생성
+uv run python app.py --report-only --pdf
 
-→ 번복 조건 불충족, **bge-m3 유지**. 개선은 설계가 예상한 정확일치에서 나왔습니다.
+# 완료한 전체 분석은 유지하고 점수 산출 기업들을 모두 다시 채점
+uv run python app.py --rescore --pdf
 
-## Agents
+uv run pytest -q
+```
 
-| Agent | 역할 | 방식 |
-|---|---|---|
-| 후보 적재 | 디렉토리북 45개사 → 기업 레코드 | PDF 블록 좌표로 다단 복원 + LLM 구조화 추출 |
-| 적격성 검증 | 비상장 · Series C 이하 · Exit 이전 · AI 관련 (G1~G4) | DART + Tavily 사전 조사, 규칙 판정 |
-| 기술 요약 **[RAG]** | 기업 기술을 IRDS·UCIe·CXL 기준값과 대조 | 검색 도구 + 수치·측정조건 원문 검증 |
-| 시장성 평가 **[RAG]** | 시장 규모·성장률·고객·위험 | 검색 도구 + 시장 범위 검증 |
-| 경쟁사 비교 | 경쟁 제품 지표 비교 | RAG 재조회 + Tavily |
-| 투자 판단 | 체크리스트 11문항 + 스코어카드 15항목 | LLM 3회 채점 → 코드 집계·판정 |
-| 보고서 생성 | 1위 기업 보고서 (Markdown·PDF 5쪽) | State만 사용, 신규 검색 없음 |
+기준일은 근거의 날짜·유효기간 검사에 쓰인다. 과거 날짜를 지정해 당시 웹 상태를 재현하는 기능은 아니다. 전체 실행 시간은 적격 기업 수, 검색 캐시, API 응답 시간에 따라 달라진다.
 
-## Architecture
+## 흐름
 
 ```mermaid
 flowchart TD
-    LOAD[후보 45개사 적재] --> SELECT[기업 선택 · 작업 State 초기화]
-    SELECT --> ELIG{적격성 G1~G4}
-    ELIG -->|적격| TECH[기술 요약 RAG]
+    PREP[전체 AI 관련성 검토 · 외부 투자 요건 조사] --> LOAD[45개 후보 적재 · 데이터 검증]
+    LOAD --> SELECT[기업 선택 · 작업 상태 초기화]
+    SELECT --> ELIG{투자 요건 확인}
+    ELIG -->|적격| TECH[기술 분석 RAG]
     ELIG -->|부적격| EXCLUDE[제외]
     ELIG -->|확인필요| HOLD[보류]
-    TECH -->|근거 부족 · 재검색 1회| TECH
-    TECH --> MARKET[시장성 RAG]
-    MARKET -->|근거 부족 · 재검색 1회| MARKET
-    MARKET --> COMP[경쟁사 비교]
-    COMP --> INVEST[투자 판단]
-    INVEST --> SAVE[결과 저장]
+    TECH -->|근거 부족 · 최대 1회| TECH
+    TECH --> MARKET[시장 분석 RAG]
+    MARKET -->|근거 부족 · 최대 1회| MARKET
+    MARKET --> COMP[경쟁 제품 비교 · 출처 검증]
+    COMP --> INVEST[3회 채점 · 코드 집계와 판정]
+    INVEST --> SAVE[기업별 결과 즉시 저장]
     EXCLUDE --> SAVE
     HOLD --> SAVE
     SAVE --> NEXT{남은 기업?}
     NEXT -->|있음| SELECT
-    NEXT -->|없음| RANK[투자 적격 순위 · 1위 선정]
+    NEXT -->|없음| RANK[전체 결과 순위 · 1위 선정]
     RANK --> REPORT[보고서 · PDF]
 ```
 
-- **Loop** — 기업별 순차 평가(외부), RAG 재검색 최대 1회(내부)
-- **Branch** — 적격성 3분기, 예외 발생 시 해당 기업만 보류하고 다음 기업 계속
-- **State** — 입력 · 흐름 제어 · 기업별 작업(기업 전환 시 리셋) · 전체 결과(누적) 4그룹
+분석 오류가 발생하면 해당 기업을 보류하고 다음 기업을 진행한다. 분석 오류는 점수 미달과 구분해 결과에 남긴다. 모든 후보의 적격성을 확인하되, 투자 요건을 통과한 기업에만 기술·시장·경쟁 분석과 채점을 수행한다.
 
-**투자 판단 기준** — 가중치 창업자 20 · 시장성 20 · **제품/기술력 30** · 경쟁 우위 15 · 실적 15 (자료로 확인할 수 없는 투자조건 항목은 삭제). **총점 70점 이상 + 기술력 평균 3.0 이상**이면 투자 적격. 동점은 총점 → 기술력 → 미확인 항목 수 → 실적 순.
+## 평가와 근거
 
-## Results — 투자 보고서 핵심 포인트
+- 가중치: 창업자 20 · 시장성 20 · 제품/기술력 30 · 경쟁 우위 15 · 실적 15.
+- **총점 70점 이상 + 기술력 평균 3.0 이상 + 적격성 통과**를 모두 만족해야 투자 적격이다.
+- 같은 입력을 3회 채점하고 항목별 중앙값을 사용한다. 점수는 실행마다 달라질 수 있으며 회차별 총점 범위를 저장한다.
+- 실제 원문 레코드에 없는 근거 ID는 제거한다. 유효한 근거가 없는 판단은 확인불가, 점수는 2점이다. 매출·투자 유치는 기업의 숫자 데이터에서 코드로 계산한다.
+- 경쟁사 사양은 확보한 원문 인용에서 확인된 값만 남긴다. 비교표는 제품·지표명·값이 맞아야 유지하며, 검증 실패한 비교와 그에 의존한 우위·열위 주장을 제외한다.
+- 보고서는 저장된 평가 결과만 사용한다. 투자 누적 금액과 개별 라운드를 구분하고, 경력 기간·TRL을 추정하지 않는다. 본문에서 인용한 출처만 REFERENCE에 넣는다.
+- 경력 10년이 확인되지 않은 전문성·몰입도와, 검증된 성능 수치가 없는 고객 가치·문제 해결 효과는 정성적 근거 기준인 3점으로 제한한다. 확인된 장점을 유지하면서 최고점 조건으로 확대하지 않는다.
+- 원문에 현재 납품·양산이 직접 명시된 제품은 개발 성숙도 기준에 반영한다. 예정·계획·부정 표현은 제외하고 TRL 숫자는 추정하지 않는다.
+- 매출 표는 연도·지역별 칸을 고정 순서로 읽어 `-`를 건너뛰지 않는다. 해외 금액의 K·M과 원화·달러 병기를 구분한다. Q7은 최근 연도 매출로 코드 판정하며 1억 원 = 100,000천원이다.
 
-| 단계 | 기업 수 | 주요 사유 |
-|---|---|---|
-| 적격성 통과 | 4 / 45 | 부적격 27곳(AI 관련성 G4 미충족 25 등) → 제외, 상장·투자 단계 확인 불가 14곳 → 보류 |
-| 스코어카드 채점 | 4 | 망고부스트 79.0 · 디노티시아 75.0 · 엑시나 63.7 · 아이디어스투실리콘 61.0 |
-| **투자 적격** | **1** | 나머지 3곳 보류. **디노티시아는 75점이지만 기술력 평균 2.67 < 3.0 → 보류** (기술 최소 기준 작동) |
+## 결과 파일
 
-**투자 추천: 망고부스트코리아 (79.0점)** — 데이터센터 CPU 부하를 줄이는 DPU 개발사 (보고서: 실행 시 `outputs/report.md`·`report.pdf` 생성)
-- **강점** — 창업자 5.0/5 (서울대 교수·박사 창업팀), 경쟁 우위 4.3 (등록 특허 3건, NVMe 인증), Series A 842억 원 유치, 해외 고객 확보
-- **리스크** — TRL·성능 지표 미공개로 NVIDIA BlueField·AMD Pensando와 정량 비교 불가, 시장 규모·매출 미확인(2점 처리)
-- **투자 전 확인 조건** — 2024년 매출, 성능 벤치마크, 경쟁 제품 대비 수치 우위
+| 파일 | 내용 |
+|---|---|
+| `outputs/report.pdf` | 최신 실행의 최종 보고서, 5쪽 이내 |
+| `outputs/report.md` | 보고서 원문 |
+| `outputs/evaluation_results.json` | 전체 판정·점수·근거·오류·실행 이력; 기업별 중간 저장 |
+| `outputs/evaluation_summary.md` | 전체 기업 결과표 |
+| `outputs/validation.json` | 총점·판정·순위·인용·PDF 페이지 수 재검증 |
 
-## Lessons Learned
+실행 결과·API 키·검색 캐시는 Git에서 제외된다. PDF 변환 실패는 평가 결과와 Markdown을 보존하며, `--pdf` 실행은 실패로 종료한다. 내용은 자동으로 삭제하지 않는다.
 
-1. **라이브러리 충돌은 실측으로만 드러난다** — FAISS와 torch(bge-m3)가 각자 OpenMP를 싣고 와 macOS에서 프로세스가 죽었다. 결과가 같은 Chroma로 교체
-2. **LLM 구조화 출력에는 숨은 규칙이 있다** — 클래스명은 영문만, `dict` 필드는 OpenAI가 400으로 거부. 레인 간 계약을 Pydantic으로 고정하고 테스트로 막음
-3. **도구 설명이 곧 LLM의 사용 설명서다** — 검색 필터(`sub_domain`) 의미를 적기 전에는 LLM이 필터를 잘못 골라 정답 문서를 놓쳤다
-4. **교차언어 검색은 영문 병기가 필요하다** — 한국어 질의가 유일한 한국어 문서(KIET)로 쏠림. 질의에 영문 용어를 붙이면 정답 복귀
-5. **엄격한 검증에는 비용이 따른다** — 근거 충분성이 거의 매번 False라 재검색이 반복되고 시간이 2배. 원인이 기업 자료 부족이면 재검색으로 해결되지 않는다
-6. **작은 표본은 튜닝하지 않는다** — RRF 가중치 0.7:0.3이 1문항 차이로 높았지만, 18문항에서는 과적합 위험이라 설계값 0.5:0.5 유지
+## 구조와 문서
 
-## Directory Structure
+| 경로 | 역할 |
+|---|---|
+| `app.py` · `runtime.py` | 실행 옵션, 중간 저장·재개, 실행 요약 |
+| `graph.py` · `state.py` · `config.py` · `schemas.py` | 흐름·상태·평가 기준·데이터 계약 |
+| `agents/` · `prompts/` | 적재·적격성·기술·시장·경쟁·투자·보고서 |
+| `rag/` · `tools/` | PDF 파싱, 문서 검색, 외부 조사, 결과 재검증 |
+| `data/` | 원천 PDF 15개, manifest, 기업 레코드 |
+| `eval/` | 팀의 검색 골든셋·임베딩 비교 실험 |
+| `tests/` | 데이터 계약·검색·분기·채점·보고서·재개 검증 |
+| `docs/` | 설계·실행 안내·트러블슈팅 |
 
-```text
-├── data/            # 원천 PDF 15개, manifest, 기업 레코드
-├── agents/          # 역할별 Agent (loader·eligibility·technology·market·competitor·investment·report)
-├── rag/             # PDF 파싱·청킹, bge-m3 하이브리드 검색
-├── tools/           # 검색 도구, DART·Tavily 외부 조사
-├── prompts/         # 역할별 프롬프트
-├── eval/            # 골든셋·임베딩 비교 실험·적재 점검
-├── outputs/         # report.md · report.pdf · evaluation_results.json
-├── tests/           # 175개 테스트 (스키마·검색·분기·채점·보고서)
-├── docs/            # 설계정의서·데이터 계약·세팅·트러블슈팅
-├── state.py · graph.py · schemas.py · llm.py · config.py
-├── app.py           # 실행 스크립트
-└── README.md
-```
+[SETUP](docs/SETUP.md) · [전체 실행과 결과 점검](docs/FULL_PIPELINE.md) · [실제 실행 점검 기록](docs/VALIDATION.md) · [데이터 계약](docs/CONTRACTS.md) · [팀 설계정의서](docs/설계정의서.md) · [트러블슈팅](docs/TROUBLESHOOTING.md).
 
-## Usage
+검색은 Chroma와 로컬 **BAAI/bge-m3 dense/sparse + RRF**를 사용한다. 팀의 18문항 실험에서 Hit@5 0.944, MRR@5 0.917을 기록했다. 작은 표본의 검색 결과이며 전체 평가 정확성을 보증하는 수치는 아니다. [비교 실험](eval/results.md).
 
-```bash
-uv sync                      # Python 3.11 · 의존성 설치
-cp .env.example .env         # OPENAI_API_KEY, TAVILY_API_KEY, DART_API_KEY 입력
-uv run python app.py --as-of 2026-09-30 --pdf   # 전체 평가 → outputs/
-uv run pytest -q             # 테스트
-```
+## 팀 기여
 
-외부 조사 결과(DART·Tavily)는 캐시로 재사용합니다. 갱신이 필요하면 `uv run python -m tools.run_tavily_eligibility`를 먼저 실행합니다. 상세 환경은 [SETUP](docs/SETUP.md)을 참고하세요.
-
-## Contributors
-
-- 김세령 : PDF Parsing, 기업 구조화 추출, 문서 코퍼스 로딩
-- 김현수 : Retrieval·Embedding 평가, 검색 도구·스키마, State·Graph 설계, 협업 환경
-- 박세웅 : DART·Tavily 외부 적격성 검증, 경쟁사 비교
-- 박인우 : 기술·시장 RAG Agent, 수치·측정조건 검증
-- 성재원 : 투자 판단·반복 채점, 보고서·PDF 시각화
+김세령: PDF 파싱·기업 추출 / 김현수: 검색·임베딩 평가·그래프 설계 / 박세웅: 외부 적격성·경쟁사 분석 / 박인우: 기술·시장 RAG / 성재원: 투자 판단·보고서.

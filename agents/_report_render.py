@@ -112,7 +112,7 @@ def company_info_table(company: dict, dir_ids: list[str]) -> str:
         ["직원 수", f"{company['직원수']}명" if company.get("직원수") is not None else "확인 불가"],
         ["대표자", company.get("대표자명") or "확인 불가"],
         ["업종 / 기술분야", f"{company.get('업종') or '-'} / {company.get('기술분야') or '-'}"],
-        ["최신 투자 단계", latest_round(company)],
+        ["투자 단계 (기업 자료)", latest_round(company)],
         ["메인 아이템", company.get("메인아이템") or "확인 불가"],
     ]
     return md_table(["항목", f"내용 {cite(dir_ids)}".strip()], rows)
@@ -136,6 +136,10 @@ def not_selected_reason(top: dict, other: dict) -> str:
 def _exclusion_reason(r: dict) -> str:
     """제외·보류 사유: 분기 사유 → 자격 요건 미충족 사유(적격이 아닐 때만) → 판단 사유 순."""
     elig = r.get("eligibility") or {}
+    failed = [f"{REQUIREMENTS[g]}: {friendly_reason(elig[g].get('사유', ''))}"
+              for g in ("G1", "G2", "G3", "G4") if (elig.get(g) or {}).get("결과") == "미충족"]
+    if failed:
+        return "투자 요건 미충족: " + "; ".join(failed)
     eligibility_reason = elig.get("사유") if elig.get("판정") != "적격" else None
     return (r.get("route_reason") or eligibility_reason
             or (r.get("decision_details") or {}).get("판단사유") or "사유 미기재")
@@ -187,6 +191,12 @@ def candidate_status(state: dict, records: list[dict], by_id: dict[str, dict]) -
         parts.append(md_table(["순위", "기업", "종합 점수", "기술력 평균", "자료 없는 항목", "비고 / 미선정 사유"], rows))
         if len(ranking) > 3:
             parts.append(f"그 외 투자 적격 {len(ranking) - 3}곳은 분량상 생략했다.")
+        if len(ranking) >= 2:
+            first = by_id[ranking[0]]["scorecard"].get("repeat") or {}
+            second = by_id[ranking[1]]["scorecard"].get("repeat") or {}
+            if first and second and max(first["total_min"], second["total_min"]) <= min(first["total_max"], second["total_max"]):
+                parts.append("상위 후보의 반복 채점 점수 범위가 겹친다. 최종 순위는 항목별 중앙값으로 정했으며, "
+                             "작은 점수 차이를 확정적인 경쟁력 격차로 해석하기 어렵다. 투자 전 추가 근거 확인이 필요하다.")
     others = [r for r in records if r.get("decision") in ("제외", "보류")]
     reasons = Counter(_clip(friendly_reason(_exclusion_reason(r)), 40) for r in others)
     if reasons:
