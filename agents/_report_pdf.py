@@ -154,7 +154,7 @@ def report_meta(state: dict) -> dict:
             "rank": f"1 / {meta['n_ok']}", "keydata": [
                 ("설립일", co.get("설립일") or "확인 불가"),
                 ("직원 수", f"{co['직원수']}명" if co.get("직원수") is not None else "확인 불가"),
-                ("최신 투자", latest_round(co)),
+                ("기업자료 투자", latest_round(co)),
                 ("메인 아이템", co.get("메인아이템") or "확인 불가"),
                 ("기술분야", co.get("기술분야") or "확인 불가"),
             ], "unknown": len(sc.get("unknown_items", [])),
@@ -288,7 +288,8 @@ sup.ref { font-size: 6.4pt; color: var(--accent); font-weight: 800; margin-left:
 .pn { font-size: 8.2pt; font-weight: 800; color: var(--navy); } .pp { font-size: 7pt; color: var(--mute); margin: .3mm 0 1mm; }
 .mtag { display:inline-block; font-size: 6.6pt; background: var(--bg); border-radius: 1mm; padding: .2mm 1.2mm; margin: 0 .8mm .6mm 0; color:#333; }
 .cnote { font-size: 6.9pt; color: var(--mute); margin: .5mm 0 2.5mm; }
-.compview { margin: 1mm 0 2mm; }
+.compview { margin: 1mm 0 2mm; break-inside: avoid; }
+.references { break-inside: avoid; }
 ol.ref { padding-left: 5mm; font-size: 7.2pt; color:#333; } ol.ref li { margin-bottom: .6mm; }
 """
 
@@ -349,7 +350,8 @@ def _render_html(md: str, meta: dict) -> str:
         sections["REFERENCE"] = re.sub(r"(?m)\s+— \[[^\]]*\]\s*$", "", sections["REFERENCE"])
     fn = lambda name, arg: build_chart(name, arg, meta)  # noqa: E731
     left = "\n".join(md_to_html(sections[k], fn) for k in top)
-    right = "\n".join(md_to_html(sections[k], fn) for k in rest)
+    right = "\n".join(f'<section class="references">{md_to_html(sections[k], fn)}</section>'
+                      if k == "REFERENCE" else md_to_html(sections[k], fn) for k in rest)
     s = meta["selected"]
     sub = f'{s["rating"]} · 총점 {s["total"]}점' if s else "투자 대상 없음"
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>{html.escape(title)}</title>

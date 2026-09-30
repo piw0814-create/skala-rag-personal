@@ -6,6 +6,7 @@
 """
 
 from langgraph.graph import END, START, StateGraph
+from time import perf_counter
 
 from agents import competitor, eligibility, investment, loader, market, report, technology
 from agents.investment import rank_key
@@ -34,10 +35,15 @@ def _company_id(state: State) -> str | None:
 
 def guarded(stage: str, fn):
     def node(state: State) -> dict:
+        company = state.get("current_company") or {}
+        print(f"  실행 중: {stage} / {company.get('company_id', '-')} {company.get('기업명', '')}", flush=True)
+        started = perf_counter()
         try:
             return fn(state)
         except Exception as e:  # 한 기업의 실패가 전체 루프를 멈추지 않도록
             return {"errors": [{"company_id": _company_id(state), "stage": stage, "error": repr(e)}]}
+        finally:
+            print(f"  단계 종료: {stage} / {perf_counter() - started:.1f}초", flush=True)
 
     return node
 

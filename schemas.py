@@ -34,8 +34,9 @@ class Member(BaseModel):
 class Revenue(BaseModel):
     연도: int | None = None
     국내: int | None = Field(None, description="천원 단위")
-    해외: int | None = Field(None, description="천원 단위")
-    상태: Literal["공개", "N/A", "비공개"] = Field(description="N/A=매출 없음, 비공개=확인 불가")
+    해외: int | None = Field(None, description="해외단위에 따른 금액; 디렉토리북은 USD")
+    해외단위: Literal["USD", "천원", "KRW_THOUSAND"] = Field("KRW_THOUSAND", description="환산 근거 없이 다른 통화와 합산하지 않는다")
+    상태: Literal["공개", "N/A", "비공개", "확인불가"] = Field(description="N/A=매출 없음, 비공개·확인불가=확인할 수 없음")
 
 
 class Funding(BaseModel):

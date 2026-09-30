@@ -19,6 +19,7 @@ from agents._report_render import (
     strip_invalid_ids,
 )
 from agents._report_highlights import patents, pick_strengths, revenue_eok
+from agents._report_grounding import competition_text, disclosure_text, summary_text, team_text, risk_text
 from agents._report_nomatch import (
     LOW_ITEM_SHOW,
     candidate_block,
@@ -100,6 +101,13 @@ def _selected_report(state: State, records: list[dict], by_id: dict[str, dict]) 
             {"영역": st.area, "평균점수": round(st.avg, 1), "사실": st.fact} for st in strengths],
     }
     prose, _ = _prose("selected", payload, _evidence_of(rec))
+    prose = ReportProse(**{k: disclosure_text(v) for k, v in prose.model_dump().items()})
+    prose.team = team_text(company, sc, dir_ids)
+    prose.risks = risk_text(rec, dir_ids)
+    prose.competition = competition_text(rec)
+    prose.summary = summary_text(rec, strengths, dir_ids)
+    if prose.tech.strip():
+        prose.tech = "기업 제출 자료에 기재된 기술·개발 단계 설명이다. " + prose.tech
     cl_table, cl_warn = checklist_table(rec.get("checklist") or {})
     n_ok = len(state.get("ranking") or [])
     head = (f"**투자 추천: {company['기업명']}** (투자 적격 {n_ok}곳 중 1위, 종합 점수 {sc['total']}점). "
@@ -160,7 +168,14 @@ def _no_selection_report(state: State, records: list[dict], by_id: dict[str, dic
     payload = _nomatch_payload(records, top)
     user = json.dumps({"mode": "no_selection", **payload,
                        "사용 가능한 근거ID": [e["근거ID"] for e in evidence if e.get("근거ID")]}, ensure_ascii=False, default=str)
-    prose = structured_call(NoMatchProse, load_prompt("report"), user)
+    if not any(r.get("scorecard") for r in records):
+        prose = NoMatchProse(summary=(
+            "투자 점수가 산출된 기업이 없어 투자 대상을 선정하지 못했다. "
+            "자격 요건 확인 또는 분석 오류로 평가가 완료되지 않았으며, 기업의 경쟁력 부족이나 점수 미달을 뜻하지 않는다. "
+            "미확인 자격과 분석 오류를 보완한 뒤 다시 평가해야 한다."
+        ))
+    else:
+        prose = structured_call(NoMatchProse, load_prompt("report"), user)
     valid = {e["근거ID"] for e in evidence if e.get("근거ID")}
     clean = lambda t: strip_invalid_ids(t, valid)[0]  # noqa: E731
     comments = {c.company_id: clean(c.text) for c in prose.commentary}
@@ -200,15 +215,19 @@ def run(state: State) -> dict:
     report = f"{body}\n\n## REFERENCE\n\n{build_reference(body, evidence)}"
     if len(report) > MAX_REPORT_CHARS:
         report += f"\n\n<!-- 경고: {len(report):,}자 (5장 추정 상한 {MAX_REPORT_CHARS:,}자 초과) -->"
-    _save_outputs(state, report)
-    return {"final_report": report}
+    outputs = _save_outputs(state, report)
+    return {"final_report": report, "report_outputs": outputs}
 
 
-def _save_outputs(state: State, report: str) -> None:
+def _save_outputs(state: State, report: str) -> dict:
     """최종 산출물은 PDF다. markdown도 함께 저장하고, PDF 변환이 실패해도 markdown은 남긴다."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUTPUT_DIR / "report.md").write_text(report, encoding="utf-8")
+    outputs = {"markdown": str(OUTPUT_DIR / "report.md"), "pdf": None, "pdf_error": None}
     try:
         export_pdf(report, report_meta(state), OUTPUT_DIR / PDF_NAME)
+        outputs["pdf"] = str(OUTPUT_DIR / PDF_NAME)
     except Exception as e:  # 평가 결과를 잃지 않도록 예외를 삼키되 경고는 크게 남긴다
+        outputs["pdf_error"] = str(e)
         warnings.warn(f"PDF 생성 실패: {e!r}. outputs/report.md만 저장됨.", stacklevel=2)
+    return outputs

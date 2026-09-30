@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -185,7 +186,50 @@ def _excerpt_from_source(product: CompetitorProduct, source_map: dict[str, dict]
     claimed = " ".join(product.source_excerpt.split())
     if claimed and claimed in text:
         return claimed[:300]
-    return text[:300]
+    return ""
+
+
+def _value_text(value: str) -> str:
+    return re.sub(r"\s+", "", str(value).replace(",", "")).casefold()
+
+
+def _is_target(product: CompetitorProduct, company: dict) -> bool:
+    def normalized(name):
+        name = re.sub(r"주식회사|\(주\)|\b(?:inc|incorporated|corp|corporation|ltd|limited)\b", "", name, flags=re.I)
+        return re.sub(r"[^a-z0-9가-힣]", "", name.casefold())
+    homepage = company.get("홈페이지") or ""
+    domain = (urlparse(homepage if "://" in homepage else "https://" + homepage).hostname or "").removeprefix("www.")
+    labels = domain.split(".")
+    brand = labels[-3] if len(labels) >= 3 and labels[-2:] == ["co", "kr"] else labels[-2] if len(labels) >= 2 else ""
+    aliases = {normalized(company.get("기업명") or "")}
+    if len(brand) >= 4:
+        aliases.add(normalized(brand))
+    host = urlparse(product.source_url).hostname or ""
+    return normalized(product.기업명) in aliases - {""} or bool(domain and (host == domain or host.endswith("." + domain)))
+
+
+def _quote_contains(value: str, excerpt: str) -> bool:
+    return bool(value and re.search(r"(?<![\d.])" + re.escape(_value_text(value)) + r"(?![\d.])",
+                                   _value_text(excerpt)))
+
+
+def _validated_rows(rows: list[CompareRow], products: list[dict], technology: dict) -> list[dict]:
+    """출처 확인된 제품 사양과 실제 D 분석 값만 비교표에 남긴다."""
+    metrics = {}
+    for product in products:
+        for metric in product["핵심지표값"]:
+            metrics.setdefault((product["기업명"], _value_text(metric["이름"])), set()).add(_value_text(metric["값"]))
+    actual = {(_value_text(m.get("지표명", "")), _value_text(m["값"]))
+              for m in technology.get("성능지표", []) if m.get("값") and m["값"] != "확인 불가"}
+    result = []
+    for row in rows:
+        peers = [v.model_dump() for v in row.경쟁사
+                 if _value_text(v.값) in metrics.get((v.이름, _value_text(row.지표)), set())]
+        if peers:
+            result.append({"지표": row.지표, "대상기업": row.대상기업
+                           if (_value_text(row.지표), _value_text(row.대상기업)) in actual else "확인 불가",
+                           "경쟁사": peers})
+    return result
 
 
 def run(state: State) -> dict:
@@ -236,7 +280,8 @@ def run(state: State) -> dict:
     ])
 
     source_map = _source_map(sources)
-    valid_products = [p for p in comparison.경쟁제품 if p.source_url in source_map]
+    valid_products = [p for p in comparison.경쟁제품 if p.source_url in source_map
+                      and not _is_target(p, company) and _excerpt_from_source(p, source_map)]
     existing_ids = {e["근거ID"] for e in state.get("current_evidence") or []}
     retrieved = [Document(page_content=context["text"], metadata=context) for context in index_context]
     rag_evidence = to_evidence(retrieved, checked=state.get("as_of_date") or date.today().isoformat())
@@ -259,10 +304,12 @@ def run(state: State) -> dict:
             "원문발췌": excerpt,
             "chunk_id": None,
         })
+        metrics = [value.model_dump() for value in product.핵심지표값
+                   if _quote_contains(value.값, excerpt)]
         products.append({
             "기업명": product.기업명,
             "제품": product.제품,
-            "핵심지표값": [value.model_dump() for value in product.핵심지표값],
+            "핵심지표값": metrics,
             "근거ID": [evidence_id],
         })
 
@@ -270,12 +317,18 @@ def run(state: State) -> dict:
     limitations = [x for x in (comparison.비교한계, index_note, search_note) if x]
     if len(products) < 2:
         limitations.append("출처 URL이 확인되는 경쟁 제품이 2개 미만")
+    rows = _validated_rows(comparison.비교표, products, technology)
+    discarded = (len(products) != len(comparison.경쟁제품)
+                 or sum(len(p["핵심지표값"]) for p in products) != sum(len(p.핵심지표값) for p in comparison.경쟁제품)
+                 or rows != [row.model_dump() for row in comparison.비교표])
+    if discarded:
+        limitations.append("출처·인용·수치 검증을 통과하지 못한 비교 내용과 우위·열위 서술을 제외함")
     return {
         "competitor_analysis": {
             "경쟁제품": products,
-            "비교표": [row.model_dump() for row in comparison.비교표],
-            "우위": comparison.우위,
-            "열위": comparison.열위,
+            "비교표": rows,
+            "우위": comparison.우위 if not discarded and products else [],
+            "열위": comparison.열위 if not discarded and products else [],
             "비교조건": comparison.비교조건,
             "비교한계": "; ".join(limitations),
             "근거ID": ids,

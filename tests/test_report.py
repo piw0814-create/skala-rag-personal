@@ -25,7 +25,7 @@ def _fake_llm(monkeypatch, **over):
         summary="총점이 높고 기술력이 우수하다 [TEC-C07-01]. 시장 성장이 크다 [MKT-C07-01, TEC-C99-01].",
         idea="엣지 NPU로 전력 문제를 해결한다 [DIR-C07-01].",
         team="CEO는 박사다 [DIR-C07-01].",
-        tech="TOPS/W 12 (자체 발표) [DIR-C07-01].",
+        tech="TOPS/W 12 (자체 발표) [DIR-C07-01]. 업계 로드맵도 검토했다 [TEC-C07-01].",
         market="CAGR 25% [MKT-C07-01].",
         competition="Hailo 대비 우위 [CMP-C07-01].",
         risks="- 양산 이력 없음 [DIR-C07-01]",

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from config import DATA_DIR
 from state import State
+from schemas import CompanyRecord
 
 CACHE = DATA_DIR / "processed" / "companies.json"
 
@@ -28,5 +29,17 @@ def run(state: State) -> dict:
     출력: {"candidate_companies": [ {company_id, 기업명, 홈페이지, 설립일, ..., source_page}, ... ], "current_index": 0}
     """
     source = Path(state.get("source_document") or DATA_DIR / "raw" / "01_기업정보.pdf")
-    companies = [c for c in load_companies(source) if not c.get("추출오류")]
-    return {"candidate_companies": companies, "current_index": 0}
+    companies = load_companies(source)
+    ids = []
+    for company in companies:
+        if company.get("추출오류"):
+            raise ValueError(f"기업 추출 실패: {company.get('company_id')}; 기업 목록을 다시 추출하세요.")
+        CompanyRecord.model_validate(company)
+        ids.append(company["company_id"])
+    if len(ids) != len(set(ids)):
+        raise ValueError("기업 목록에 중복 company_id가 있습니다.")
+    # 재개 입력에는 저장을 마친 기업만 들어 있다. 미완료 기업은 처음부터 다시 평가한다.
+    completed = state.get("evaluation_results") or []
+    if [r["company_id"] for r in completed] != ids[:len(completed)]:
+        raise ValueError("저장된 결과가 현재 기업 목록의 순서와 일치하지 않습니다.")
+    return {"candidate_companies": companies, "current_index": len(completed)}

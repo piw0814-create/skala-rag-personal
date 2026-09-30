@@ -147,7 +147,7 @@ def test_unknown_needs_majority(monkeypatch):
 def test_checklist_median_by_judgement_order(monkeypatch):
     def with_q1(judge):
         o = _llm_out(4)
-        o.checklist[0] = ChecklistOut(id="Q1", 판정=judge, 근거="x", 근거ID=[])
+        o.checklist[0] = ChecklistOut(id="Q1", 판정=judge, 근거="x", 근거ID=["DIR-C03-01"])
         return o
     _sequence(monkeypatch, [with_q1("YES"), with_q1("NO"), with_q1("NO")])
     assert investment.run(_state())["checklist"]["Q1"]["판정"] == "NO"
@@ -177,3 +177,42 @@ def test_partial_failure_is_tolerated_but_total_failure_raises(monkeypatch):
     monkeypatch.setattr(investment, "structured_call", always)
     with pytest.raises(RuntimeError):
         investment.run(_state())
+
+# ── Q7(매출이 발생하는가?)은 코드 판정 ───────────────────────────────────────
+
+def test_judge_q7_rules_and_unit_handling():
+    from agents._report_scoring import judge_q7
+    # 망고부스트: 2024 국내 21,818천원 = 약 0.2억 원 → 1억 미만이므로 PARTIAL (LLM은 '약 2억 원, YES'라고 잘못 답했다)
+    v, why = judge_q7(company("C03", "망고", {"연도": 2024, "국내": 21818, "해외": None, "해외단위": "USD", "상태": "공개"}))
+    assert v == "PARTIAL" and "0.2억 원" in why and "21,818천원" in why
+    assert judge_q7(company("C1", "a", {"연도": 2024, "국내": 100_000, "해외": None, "상태": "공개"}))[0] == "YES"      # 정확히 1억
+    assert judge_q7(company("C1", "a", {"연도": 2024, "국내": 99_999, "해외": None, "상태": "공개"}))[0] == "PARTIAL"
+    # 달러 해외 매출은 환산하지 않는다(E2와 같은 정책): 국내가 1억 미만이면 1억 이상 여부를 알 수 없다
+    v, why = judge_q7(company("C1", "a", {"연도": 2024, "국내": 30_000, "해외": 50_000, "해외단위": "USD", "상태": "공개"}))
+    assert v == "확인불가" and "환산 근거가 없어" in why
+    # 국내 매출만으로 1억 이상이면 해외 값과 무관하게 YES
+    v, why = judge_q7(company("C1", "a", {"연도": 2024, "국내": 250_000, "해외": 50_000, "해외단위": "USD", "상태": "공개"}))
+    assert v == "YES" and "환산하지 않음" in why
+    assert judge_q7(company("C1", "a", {"연도": 2024, "국내": None, "해외": None, "상태": "N/A"}))[0] == "NO"
+    assert judge_q7(company("C1", "a", {"연도": 2024, "국내": None, "해외": None, "상태": "비공개"}))[0] == "확인불가"
+
+
+def test_q7_and_e2_follow_the_same_currency_policy():
+    """알에프온: 국내 9.0억 + 해외 $137,920. 달러는 환산하지 않으므로 E2는 확인불가(2점), Q7은 국내만으로 1억 이상이라 YES."""
+    from agents._report_scoring import judge_q7, score_e2
+    sales = {"연도": 2024, "국내": 901_000, "해외": 137_920, "해외단위": "USD", "상태": "공개"}
+    co = company("C08", "알에프온", sales)
+    assert score_e2(co)[:2] == (2, True)
+    v, why = judge_q7(co)
+    assert v == "YES" and "9.0억 원" in why and "901,000천원" in why
+
+
+def test_llm_wrong_q7_is_overridden_by_code(monkeypatch):
+    out = _llm_out(4)
+    out.checklist[6] = ChecklistOut(id="Q7", 판정="YES", 근거="매출 약 2억 원 발생", 근거ID=[])  # LLM의 단위 환산 오류
+    monkeypatch.setattr(investment, "structured_call", lambda *a, **k: out)
+    monkeypatch.setattr(investment, "load_prompt", lambda n: "p")
+    st = _state()
+    st["current_company"] = company("C03", "망고", {"연도": 2024, "국내": 21818, "해외": None, "해외단위": "USD", "상태": "공개"})
+    q7 = investment.run(st)["checklist"]["Q7"]
+    assert q7["판정"] == "PARTIAL" and "코드 산출" in q7["근거"] and "2억 원 발생" not in q7["근거"]

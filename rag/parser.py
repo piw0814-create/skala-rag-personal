@@ -299,6 +299,10 @@ def parse_company_pages(pdf_path: Path, only_pages: set[int] | None = None, with
                 png = pdf[p["output_page"] - 1].get_pixmap(dpi=110).tobytes("png")
                 images[p["output_page"]] = base64.b64encode(png).decode()
 
+    with pymupdf.open(pdf_path) as pdf:  # 매출 표는 원문 텍스트에서 직접 읽는다(LLM은 칸-연도 짝짓기를 틀린 적이 있다)
+        for p in targets:
+            p["매출칸"] = revenue_cells_from_text(pdf[p["output_page"] - 1].get_text())
+
     llm = _llm()
     inputs = [_messages(p["text"], images.get(p["output_page"])) for p in targets]
     results = llm.batch(inputs, config={"max_concurrency": 5}, return_exceptions=True)
@@ -317,7 +321,7 @@ def parse_company_pages(pdf_path: Path, only_pages: set[int] | None = None, with
 # ---------- 원문 → 계약 스키마 (docs/CONTRACTS.md 3-3) ----------
 
 def to_record(e: CompanyExtract, page: dict) -> dict:
-    rev = revenue(e.revenue)
+    rev = revenue(page.get("매출칸") or e.revenue)  # 원문 표를 읽었으면 그것을, 못 읽었으면 LLM 추출값을 쓴다
     return {
         "company_id": page["company_id"],
         "기업명": e.name.strip(),
@@ -365,8 +369,10 @@ def to_date(raw: str | None) -> str | None:
 def money(raw: str | None) -> tuple[int | None, str]:
     """금액 원문 → (천원 단위 int, 상태). 상태: 공개 | N/A | 비공개 | 확인불가."""
     s = (raw or "").strip()
-    if not s or s in {"-", "–", "—"}:
+    if not s:
         return None, "확인불가"
+    if s in {"-", "–", "—"}:  # 디렉토리북 표에서 '-'는 해당 연도·지역 매출 없음
+        return None, "N/A"
     if re.search(r"\bn/?a\b", s, re.I):
         return None, "N/A"
     if "비공개" in s or "*" in s:
@@ -387,13 +393,71 @@ def money(raw: str | None) -> tuple[int | None, str]:
     return round(v), "공개"
 
 
+_USD_MULT = {"k": 1e3, "m": 1e6, "b": 1e9, "천": 1e3, "만": 1e4, "백만": 1e6, "억": 1e8}
+
+
 def usd(raw: str | None) -> tuple[int | None, str]:
+    """해외 매출 칸 원문 → (달러 int, 상태). '$3,500,000'·'137,920달러'·'2.85K'·'1.02M'·'2억달러'를 읽는다."""
     s = (raw or "").strip()
-    v, status = money(s)
+    paired = re.search(r"\(\s*(\$\s*\d[\d,]*(?:\.\d+)?\s*[KkMmBb]?)\s*\)", s)
+    if paired:
+        s = paired.group(1)  # 같은 칸의 원화·달러 병기는 명시된 달러 값을 사용
+    _, status = money(s)  # 빈 칸·'-'·N/A·비공개 판정은 money와 같다
     if status != "공개":
         return None, status
-    m = re.search(r"\d[\d,]*(\.\d+)?", s)
-    return round(float(m.group().replace(",", ""))), "공개"
+    m = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*(백만|[KkMmBb천만억])?", s)
+    num = float(m.group(1).replace(",", ""))
+    mult = _USD_MULT.get((m.group(2) or "").lower(), 1)
+    if "원" in s[m.end():].split("(")[0] and "$" not in s and "달러" not in s:
+        return None, "확인불가"  # 원화만 적힌 해외 칸을 임의 환율로 달러 값으로 바꾸지 않는다
+    return round(num * mult), "공개"
+
+
+# 매출액 표를 PDF 원문 텍스트에서 직접 읽는다. 표는 '헤더(연도 4칸) → 값 4칸' 순서가 고정이라
+# LLM이 칸을 연도에 짝짓게 두면 '-' 칸을 건너뛰어 값이 다른 연도로 밀리는 오류가 났다(망고부스트·알에프온).
+_YEAR = re.compile(r"(20\d\d)\s*년?")
+_CELL = re.compile(r"^(?:[-–—]|n/?a|비공개|\*+|\$?\s*\d[\d,]*(?:\.\d+)?\s*(?:백만|[KkMmBb천만억])?\s*(?:천원|만원|백만원|억원|억|원|달러|불)?(?:\s*\(.*\))?)$", re.I)  # 금액 뒤 설명 괄호 허용: '$72,280(23.5월 환율 기준)'
+_PAREN_USD = re.compile(r"^\(\s*\$\s*\d[\d,]*(?:\.\d+)?[^)]*\)$")
+_SECTION_END = ("투자 유치", "주요 거래처", "지식재산", "인증 및")
+
+
+def revenue_cells_from_text(raw_page: str) -> list[RevenueCell] | None:
+    """페이지 원문(pymupdf get_text)의 '매출액' 표 → 칸 목록. 읽을 수 없는 형태면 None(→ LLM 결과 사용).
+
+    지원 형태: 국내·해외 두 헤더 + 연도 4칸(국내 2, 해외 2) 또는 헤더 하나 + 연도 2칸.
+    해외 칸이 '4,107,122천원'과 '($2,928,236)'로 병기되면 괄호 안 달러 값을 쓴다.
+    """
+    k = raw_page.find("매출액")
+    if k < 0:
+        return None
+    lines = [l.strip() for l in raw_page[k:].splitlines()[1:] if l.strip()]
+    regions, years, i = [], [], 0
+    while i < len(lines) and not _CELL.match(lines[i]):  # 헤더 구간: 국내/해외 라벨과 연도
+        ln = lines[i]
+        if ln.startswith(("국내", "해외")):
+            regions.append(ln[:2])
+        elif _YEAR.fullmatch(ln):
+            years.append(int(_YEAR.fullmatch(ln).group(1)))
+        elif any(ln.startswith(x) for x in _SECTION_END):
+            return None
+        i += 1
+        if years and len(years) == (4 if len(regions) == 2 else 2 if len(regions) == 1 else -1):
+            break
+    if not years or (len(regions), len(years)) not in {(2, 4), (1, 2)}:
+        return None
+    slots = [(region, year) for n, region in enumerate(regions)
+             for year in years[n * 2:n * 2 + 2]]
+    values: list[str] = []
+    while i < len(lines) and len(values) < len(slots):
+        if not _CELL.match(lines[i]):
+            return None  # 값 칸이 모자라거나 형태가 다르다
+        values.append(lines[i])
+        i += 1
+    if len(values) < len(slots):
+        return None
+    if slots[-1][0] == "해외" and i < len(lines) and _PAREN_USD.match(lines[i]):
+        values[-1] = lines[i].strip("() ")  # 원화·달러 병기 → 달러 값
+    return [RevenueCell(year=y, region=r, raw=v) for (r, y), v in zip(slots, values)]
 
 
 def revenue(cells: list[RevenueCell]) -> dict:
@@ -409,7 +473,7 @@ def revenue(cells: list[RevenueCell]) -> dict:
     for row in by_year.values():
         st = row.pop("_st")
         row["상태"] = ("공개" if "공개" in st else "비공개" if "비공개" in st
-                      else "N/A" if "N/A" in st else "확인불가")
+                      else "확인불가" if "확인불가" in st else "N/A")
     latest = by_year[max(by_year)]
     return {**latest, "해외단위": "USD", "이력": [by_year[y] for y in sorted(by_year)]}
 
